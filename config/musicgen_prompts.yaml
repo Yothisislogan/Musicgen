@@ -1,0 +1,32 @@
+# WIT Radio music generation prompts
+
+morning_acoustic:
+  description: "calm acoustic morning music"
+  prompts:
+    - "warm acoustic guitar, soft folk pop, sunrise coffeehouse mood, gentle percussion"
+    - "mellow indie acoustic instrumental, light piano, peaceful morning energy"
+    - "fingerpicked guitar, warm bass, brushed drums, calm and hopeful"
+
+
+day_shift:
+  description: "upbeat daytime work music"
+  prompts:
+    - "upbeat indie pop instrumental, bright guitars, modern drums, productive workday energy"
+    - "office friendly electronic pop, clean synths, steady beat, optimistic mood"
+    - "modern pop rock instrumental, positive energy, driving but not aggressive"
+
+
+dance_party:
+  description: "high energy evening dance music"
+  prompts:
+    - "festival EDM instrumental, energetic build, clean drop, bright synth lead"
+    - "dance pop anthem, four on the floor beat, big chorus energy, night party vibe"
+    - "Brazilian phonk inspired club track, heavy bass, fast rhythm, neon street energy"
+
+
+night_shift:
+  description: "late night atmospheric music"
+  prompts:
+    - "late night lo-fi instrumental, warm vinyl texture, soft keys, relaxed hip hop drums"
+    - "dark synthwave night drive, analog synth bass, neon atmosphere, steady groove"
+    - "ambient electronic dreamscape, soft pads, subtle pulse, midnight radio atmosphere"
