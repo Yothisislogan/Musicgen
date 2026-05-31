@@ -15,6 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from .config import settings
+from .lyria.router import router as lyria_router
 from .pipelines import pipeline_manager, preload_if_requested
 from .schemas import AudioResponse, GenerateRequest, InferenceMetadata
 
@@ -22,9 +23,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="Kortexa Music Generation Server",
-    version="0.1.0",
-    description="Music generation using ACE-Step 1.5 diffusion models.",
+    version="0.2.0",
+    description="Music generation using ACE-Step 1.5 diffusion models and Google Lyria via Gemini Batch API.",
 )
+
+app.include_router(lyria_router)
 
 
 @app.on_event("startup")
@@ -45,6 +48,8 @@ async def health() -> dict:
         "lm_enabled": settings.enable_lm,
         "lm_backend": settings.lm_backend,
         "lm_available": pipeline_manager.lm_available,
+        "lyria_enabled": settings.lyria_enabled,
+        "lyria_model": settings.lyria_model,
     }
 
 

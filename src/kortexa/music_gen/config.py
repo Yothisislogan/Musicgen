@@ -33,6 +33,14 @@ class Settings:
 
     dev_mode: bool = os.getenv("MUSIC_ENV", "production") == "development"
 
+    # Google Lyria / Gemini Batch API
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    lyria_model: str = os.getenv("LYRIA_MODEL", "models/lyria-realtime-exp")
+
+    @property
+    def lyria_enabled(self) -> bool:
+        return bool(self.gemini_api_key)
+
     @property
     def preload_models(self) -> bool:
         """Preload models on startup. Disabled in dev mode to avoid reloader memory issues."""
