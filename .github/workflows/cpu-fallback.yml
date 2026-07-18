@@ -1,0 +1,20 @@
+name: CPU fallback checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpu-fallback:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install lightweight CPU test dependencies
+        run: python -m pip install numpy pyloudnorm pytest ruff black fastapi pydantic starlette httpx
+      - name: Lint CPU fallback code
+        run: python -m ruff check src/kortexa/music_gen/cpu_generator.py src/kortexa/music_gen/cpu_jobs.py tests_py benchmarks
+      - name: Run CPU fallback tests
+        run: PYTHONPATH=src python -m pytest tests_py

@@ -31,6 +31,12 @@ class Settings:
     default_audio_format: str = os.getenv("AUDIO_FORMAT", "flac")
     max_batch_size: int = int(os.getenv("MAX_BATCH_SIZE", "2"))
 
+    # Experimental CPU emergency-bed generator
+    cpu_jobs_db: str = os.getenv("CPU_JOBS_DB", "runtime/cpu_music_jobs.sqlite3")
+    cpu_output_dir: str = os.getenv("CPU_OUTPUT_DIR", "runtime/cpu_music_outputs")
+    cpu_public_prefix: str = os.getenv("CPU_PUBLIC_PREFIX", "/cpu-audio")
+    cpu_api_token: Optional[str] = os.getenv("CPU_API_TOKEN")
+
     dev_mode: bool = os.getenv("MUSIC_ENV", "production") == "development"
 
     @property

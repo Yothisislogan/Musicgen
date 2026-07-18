@@ -4,21 +4,31 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import shutil
 import tempfile
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
-from .cpu_generator import CpuSongSpec, render_cpu_song
+from .cpu_generator import CpuSongSpec
+from .cpu_jobs import CpuMusicJobQueue
 from .pipelines import pipeline_manager, preload_if_requested
-from .schemas import AudioResponse, CpuGenerateRequest, GenerateRequest, InferenceMetadata
+from .schemas import (
+    AudioResponse,
+    CpuGenerateRequest,
+    CpuJobResponse,
+    GenerateRequest,
+    InferenceMetadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +36,17 @@ app = FastAPI(
     title="Kortexa Music Generation Server",
     version="0.1.0",
     description="Music generation using ACE-Step 1.5 diffusion models.",
+)
+
+cpu_job_queue = CpuMusicJobQueue(
+    db_path=settings.cpu_jobs_db,
+    output_dir=settings.cpu_output_dir,
+    public_prefix=settings.cpu_public_prefix,
+)
+app.mount(
+    settings.cpu_public_prefix,
+    StaticFiles(directory=Path(settings.cpu_output_dir)),
+    name="cpu_audio",
 )
 
 
@@ -243,20 +264,50 @@ async def generate(req: GenerateRequest) -> AudioResponse:
     )
 
 
+async def _require_cpu_token(authorization: str | None = Header(default=None)) -> None:
+    """Require a configured bearer token for CPU emergency-bed generation."""
+    if not settings.cpu_api_token:
+        raise HTTPException(status_code=503, detail="CPU generation requires CPU_API_TOKEN")
+    expected = f"Bearer {settings.cpu_api_token}"
+    if authorization != expected:
+        raise HTTPException(status_code=401, detail="Missing or invalid CPU generation token")
+
+
+def _cpu_job_response(job: dict) -> CpuJobResponse:
+    return CpuJobResponse(
+        id=job["id"],
+        state=job["state"],
+        created_at=job["created_at"],
+        updated_at=job["updated_at"],
+        actual_seed=job["actual_seed"],
+        audio_url=job.get("audio_url"),
+        sample_rate=job.get("sample_rate"),
+        peak=job.get("peak"),
+        rms_dbfs=job.get("rms_dbfs"),
+        lufs=job.get("lufs"),
+        quality_warnings=json.loads(job.get("quality_warnings_json") or "[]"),
+        error=job.get("error"),
+    )
+
+
 # ----------------------------------------------------------------------
-# POST /generate/cpu — dependency-free CPU instrumental generator
+# POST /generate/cpu — experimental authenticated CPU emergency-bed queue
 # ----------------------------------------------------------------------
 @app.post(
     "/generate/cpu",
-    response_model=AudioResponse,
-    responses={400: {"description": "Bad Request"}, 500: {"description": "CPU rendering failed"}},
+    response_model=CpuJobResponse,
+    status_code=202,
+    responses={401: {"description": "Unauthorized"}, 500: {"description": "CPU enqueue failed"}},
 )
-async def generate_cpu(req: CpuGenerateRequest) -> AudioResponse:
-    """Render a full instrumental WAV on ordinary CPU hardware without ML models."""
+async def generate_cpu(
+    req: CpuGenerateRequest,
+    _: None = Depends(_require_cpu_token),
+) -> CpuJobResponse:
+    """Queue an experimental CPU emergency-bed render and return persistent job state."""
     duration = req.duration or 180.0
     bpm = req.bpm or 0
     logger.info(
-        "generate_cpu: caption='%s' duration=%s bpm=%s key=%s scale=%s style=%s",
+        "queue_cpu: caption='%s' duration=%s bpm=%s key=%s scale=%s style=%s",
         req.caption,
         duration,
         req.bpm,
@@ -265,10 +316,9 @@ async def generate_cpu(req: CpuGenerateRequest) -> AudioResponse:
         req.style,
     )
 
-    start = time.perf_counter()
     try:
-        wav_bytes = await asyncio.to_thread(
-            render_cpu_song,
+        job = await asyncio.to_thread(
+            cpu_job_queue.enqueue,
             CpuSongSpec(
                 caption=req.caption,
                 duration=duration,
@@ -280,27 +330,23 @@ async def generate_cpu(req: CpuGenerateRequest) -> AudioResponse:
             ),
         )
     except Exception as exc:
-        logger.exception("CPU generation failure")
-        raise HTTPException(status_code=500, detail="CPU music generation failed") from exc
+        logger.exception("CPU enqueue failure")
+        raise HTTPException(status_code=500, detail="CPU music job enqueue failed") from exc
+    return _cpu_job_response(job)
 
-    elapsed = time.perf_counter() - start
-    encoded = base64.b64encode(wav_bytes).decode("utf-8")
-    logger.info("CPU generated 1 wav in %.2fs (%d bytes)", elapsed, len(wav_bytes))
 
-    return AudioResponse(
-        audios=[encoded],
-        metadata=_build_metadata(
-            request_type="cpu_instrumental",
-            caption=req.caption,
-            duration=duration,
-            steps=0,
-            guidance_scale=0.0,
-            seed=req.seed,
-            elapsed=elapsed,
-            num_audios=1,
-            audio_format="wav",
-        ),
-    )
+@app.get("/generate/cpu/{job_id}", response_model=CpuJobResponse)
+async def get_cpu_job(
+    job_id: str,
+    _: None = Depends(_require_cpu_token),
+) -> CpuJobResponse:
+    """Return queued/running/failed/completed state for a CPU emergency-bed job."""
+    try:
+        job = await asyncio.to_thread(cpu_job_queue.get, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="CPU music job not found") from exc
+    cpu_job_queue.ensure_worker()
+    return _cpu_job_response(job)
 
 
 # ----------------------------------------------------------------------

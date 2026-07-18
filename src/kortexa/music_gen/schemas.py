@@ -51,7 +51,7 @@ class GenerateRequest(BaseModel):
 
 
 class CpuGenerateRequest(BaseModel):
-    """Request body for dependency-free CPU instrumental generation."""
+    """Request body for experimental CPU emergency music-bed generation."""
 
     caption: str = Field(..., min_length=1, max_length=512)
     duration: Optional[float] = Field(default=180.0, ge=10, le=600)
@@ -123,6 +123,23 @@ class InferenceMetadata(BaseModel):
     num_audios: int
     audio_format: str
     lm_enabled: bool
+
+
+class CpuJobResponse(BaseModel):
+    """Persistent CPU job status returned by the emergency-bed queue."""
+
+    id: str
+    state: Literal["queued", "running", "failed", "completed"]
+    created_at: float
+    updated_at: float
+    actual_seed: int
+    audio_url: Optional[str] = None
+    sample_rate: Optional[int] = None
+    peak: Optional[float] = None
+    rms_dbfs: Optional[float] = None
+    lufs: Optional[float] = None
+    quality_warnings: list[str] = Field(default_factory=list)
+    error: Optional[str] = None
 
 
 class AudioResponse(BaseModel):

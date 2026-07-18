@@ -30,15 +30,18 @@ Finished audio should be exported into show folders that match the WIT Radio sch
 
 The live broadcast system should only play finished audio files, not depend on real-time AI generation.
 
-## CPU-only instrumental generator
+## Experimental CPU emergency music-bed generator
 
-For machines without a GPU, the server includes a dependency-free CPU renderer at `POST /generate/cpu`. It does **not** load ACE-Step, Torch, or any diffusion model; it procedurally renders drums, bass, chords, pads, and lead lines directly to 16-bit stereo WAV audio. This is intended for ordinary CPU hosts such as an Intel Core i7-6700 with 32-64 GB RAM and SATA SSD storage.
+For machines without a GPU, the server includes an experimental fallback at `POST /generate/cpu`. This is **not** the primary music engine and is not a replacement for GPU model generation; it is intended for emergency instrumental beds, silence prevention, and quick scratch tracks on ordinary CPU hosts such as an Intel Core i7-6700 with 32-64 GB RAM and SATA SSD storage.
 
-Example 3-minute instrumental request:
+The CPU path uses a persistent SQLite-backed queue, runs one render worker at a time, writes 44.1 kHz WAV files to disk under `CPU_OUTPUT_DIR`, and returns a job with queued/running/failed/completed state plus an `audio_url` when complete. Callers must configure `CPU_API_TOKEN` on the server and send `Authorization: Bearer <token>`; requests are rejected when the token is missing or unset.
+
+Example 3-minute instrumental job request:
 
 ```bash
 curl -X POST http://127.0.0.1:4009/generate/cpu \
   -H 'content-type: application/json' \
+  -H "authorization: Bearer $CPU_API_TOKEN" \
   -d '{
     "caption": "warm lo-fi instrumental with piano chords, bass, soft drums, and no vocals",
     "duration": 180,
@@ -50,4 +53,11 @@ curl -X POST http://127.0.0.1:4009/generate/cpu \
   }'
 ```
 
-The response matches the existing API shape and returns one base64-encoded WAV in `audios[0]` with metadata `request_type: "cpu_instrumental"`. Supported CPU styles are `auto`, `balanced`, `dance`, `lofi`, `ambient`, and `rock`; supported scales are `major`, `minor`, `dorian`, `mixolydian`, and `pentatonic`.
+Poll the returned job ID until `state` is `completed`:
+
+```bash
+curl -H "authorization: Bearer $CPU_API_TOKEN" \
+  http://127.0.0.1:4009/generate/cpu/<job_id>
+```
+
+The completed job includes the actual seed used, sample rate, peak, RMS dBFS, LUFS, quality warnings, and an `audio_url` pointing at the generated WAV file.
