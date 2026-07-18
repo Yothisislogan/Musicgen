@@ -29,3 +29,25 @@ Finished audio should be exported into show folders that match the WIT Radio sch
 ## Important Rule
 
 The live broadcast system should only play finished audio files, not depend on real-time AI generation.
+
+## CPU-only instrumental generator
+
+For machines without a GPU, the server includes a dependency-free CPU renderer at `POST /generate/cpu`. It does **not** load ACE-Step, Torch, or any diffusion model; it procedurally renders drums, bass, chords, pads, and lead lines directly to 16-bit stereo WAV audio. This is intended for ordinary CPU hosts such as an Intel Core i7-6700 with 32-64 GB RAM and SATA SSD storage.
+
+Example 3-minute instrumental request:
+
+```bash
+curl -X POST http://127.0.0.1:4009/generate/cpu \
+  -H 'content-type: application/json' \
+  -d '{
+    "caption": "warm lo-fi instrumental with piano chords, bass, soft drums, and no vocals",
+    "duration": 180,
+    "bpm": 84,
+    "key": "C",
+    "scale": "minor",
+    "style": "lofi",
+    "seed": 42
+  }'
+```
+
+The response matches the existing API shape and returns one base64-encoded WAV in `audios[0]` with metadata `request_type: "cpu_instrumental"`. Supported CPU styles are `auto`, `balanced`, `dance`, `lofi`, `ambient`, and `rock`; supported scales are `major`, `minor`, `dorian`, `mixolydian`, and `pentatonic`.

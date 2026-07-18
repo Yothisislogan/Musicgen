@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import logging
 import os
@@ -15,8 +16,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
 from .config import settings
+from .cpu_generator import CpuSongSpec, render_cpu_song
 from .pipelines import pipeline_manager, preload_if_requested
-from .schemas import AudioResponse, GenerateRequest, InferenceMetadata
+from .schemas import AudioResponse, CpuGenerateRequest, GenerateRequest, InferenceMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +68,9 @@ def _collect_audio_files(directory: str, audio_format: str) -> list[str]:
         if not os.path.isfile(fpath):
             continue
         # Accept files matching the requested format, or any audio file
-        if fname.endswith(f".{audio_format}") or fname.endswith((".flac", ".mp3", ".wav", ".opus", ".aac")):
+        if fname.endswith(f".{audio_format}") or fname.endswith(
+            (".flac", ".mp3", ".wav", ".opus", ".aac")
+        ):
             with open(fpath, "rb") as f:
                 encoded.append(base64.b64encode(f.read()).decode("utf-8"))
     return encoded
@@ -176,7 +180,10 @@ def _build_metadata(
 async def generate(req: GenerateRequest) -> AudioResponse:
     logger.info(
         "generate: caption='%s' duration=%s steps=%d guidance=%.1f",
-        req.caption, req.duration, req.inference_steps, req.guidance_scale,
+        req.caption,
+        req.duration,
+        req.inference_steps,
+        req.guidance_scale,
     )
 
     params = _build_params(
@@ -204,7 +211,9 @@ async def generate(req: GenerateRequest) -> AudioResponse:
     with _temp_dir() as save_dir:
         try:
             result = await pipeline_manager.generate_async(
-                params=params, config=config, save_dir=save_dir,
+                params=params,
+                config=config,
+                save_dir=save_dir,
             )
         except Exception as exc:
             logger.exception("Generation failure")
@@ -235,11 +244,72 @@ async def generate(req: GenerateRequest) -> AudioResponse:
 
 
 # ----------------------------------------------------------------------
+# POST /generate/cpu — dependency-free CPU instrumental generator
+# ----------------------------------------------------------------------
+@app.post(
+    "/generate/cpu",
+    response_model=AudioResponse,
+    responses={400: {"description": "Bad Request"}, 500: {"description": "CPU rendering failed"}},
+)
+async def generate_cpu(req: CpuGenerateRequest) -> AudioResponse:
+    """Render a full instrumental WAV on ordinary CPU hardware without ML models."""
+    duration = req.duration or 180.0
+    bpm = req.bpm or 0
+    logger.info(
+        "generate_cpu: caption='%s' duration=%s bpm=%s key=%s scale=%s style=%s",
+        req.caption,
+        duration,
+        req.bpm,
+        req.key,
+        req.scale,
+        req.style,
+    )
+
+    start = time.perf_counter()
+    try:
+        wav_bytes = await asyncio.to_thread(
+            render_cpu_song,
+            CpuSongSpec(
+                caption=req.caption,
+                duration=duration,
+                bpm=bpm,
+                key=req.key,
+                scale=req.scale,
+                seed=req.seed,
+                style=req.style,
+            ),
+        )
+    except Exception as exc:
+        logger.exception("CPU generation failure")
+        raise HTTPException(status_code=500, detail="CPU music generation failed") from exc
+
+    elapsed = time.perf_counter() - start
+    encoded = base64.b64encode(wav_bytes).decode("utf-8")
+    logger.info("CPU generated 1 wav in %.2fs (%d bytes)", elapsed, len(wav_bytes))
+
+    return AudioResponse(
+        audios=[encoded],
+        metadata=_build_metadata(
+            request_type="cpu_instrumental",
+            caption=req.caption,
+            duration=duration,
+            steps=0,
+            guidance_scale=0.0,
+            seed=req.seed,
+            elapsed=elapsed,
+            num_audios=1,
+            audio_format="wav",
+        ),
+    )
+
+
+# ----------------------------------------------------------------------
 # POST /generate/stream — SSE streaming variant of /generate
 # ----------------------------------------------------------------------
 @app.post("/generate/stream")
 async def generate_stream(req: GenerateRequest, include_audio: bool = True):
     from .sse import stream_generate
+
     return await stream_generate(req, include_audio=include_audio)
 
 
@@ -272,7 +342,9 @@ async def cover(
     logger.info("cover: caption='%s' strength=%.2f", caption, audio_cover_strength)
 
     if batch_size > settings.max_batch_size:
-        raise HTTPException(status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}")
+        raise HTTPException(
+            status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}"
+        )
 
     start = time.perf_counter()
     with _temp_dir() as save_dir:
@@ -304,7 +376,9 @@ async def cover(
 
         try:
             result = await pipeline_manager.generate_async(
-                params=params, config=config, save_dir=save_dir,
+                params=params,
+                config=config,
+                save_dir=save_dir,
             )
         except Exception as exc:
             logger.exception("Cover failure")
@@ -366,7 +440,9 @@ async def repaint(
     if repainting_end <= repainting_start:
         raise HTTPException(status_code=400, detail="repainting_end must be > repainting_start")
     if batch_size > settings.max_batch_size:
-        raise HTTPException(status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}")
+        raise HTTPException(
+            status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}"
+        )
 
     start = time.perf_counter()
     with _temp_dir() as save_dir:
@@ -399,7 +475,9 @@ async def repaint(
 
         try:
             result = await pipeline_manager.generate_async(
-                params=params, config=config, save_dir=save_dir,
+                params=params,
+                config=config,
+                save_dir=save_dir,
             )
         except Exception as exc:
             logger.exception("Repaint failure")

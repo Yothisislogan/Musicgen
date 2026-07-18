@@ -50,10 +50,67 @@ class GenerateRequest(BaseModel):
         return value
 
 
+class CpuGenerateRequest(BaseModel):
+    """Request body for dependency-free CPU instrumental generation."""
+
+    caption: str = Field(..., min_length=1, max_length=512)
+    duration: Optional[float] = Field(default=180.0, ge=10, le=600)
+    bpm: Optional[int] = Field(None, ge=30, le=300)
+    key: str = Field("C")
+    scale: str = Field("minor")
+    seed: int = Field(-1, ge=-1, le=2**32 - 1)
+    style: str = Field("auto")
+    audio_format: Literal["wav"] = "wav"
+
+    @field_validator("key")
+    @classmethod
+    def _check_key(cls, value: str) -> str:
+        allowed = {
+            "C",
+            "C#",
+            "Db",
+            "D",
+            "D#",
+            "Eb",
+            "E",
+            "F",
+            "F#",
+            "Gb",
+            "G",
+            "G#",
+            "Ab",
+            "A",
+            "A#",
+            "Bb",
+            "B",
+        }
+        if value not in allowed:
+            raise ValueError(f"key must be one of {allowed}")
+        return value
+
+    @field_validator("scale")
+    @classmethod
+    def _check_scale(cls, value: str) -> str:
+        allowed = {"major", "minor", "dorian", "mixolydian", "pentatonic"}
+        normalized = value.lower()
+        if normalized not in allowed:
+            raise ValueError(f"scale must be one of {allowed}")
+        return normalized
+
+    @field_validator("style")
+    @classmethod
+    def _check_style(cls, value: str) -> str:
+        allowed = {"auto", "balanced", "dance", "lofi", "ambient", "rock"}
+        normalized = value.lower()
+        if normalized not in allowed:
+            raise ValueError(f"style must be one of {allowed}")
+        return normalized
+
+
 class InferenceMetadata(BaseModel):
     """Response metadata shared across endpoints."""
 
-    request_type: Literal["text2music", "cover", "repaint"]
+    request_type: Literal["text2music", "cover", "repaint", "cpu_instrumental"]
     dit_config: str
     device: str
     dtype: str
