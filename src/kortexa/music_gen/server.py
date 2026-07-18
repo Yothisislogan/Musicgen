@@ -2,21 +2,33 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
+import json
 import logging
 import os
 import shutil
 import tempfile
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from .cpu_generator import CpuSongSpec
+from .cpu_jobs import CpuMusicJobQueue
 from .pipelines import pipeline_manager, preload_if_requested
-from .schemas import AudioResponse, GenerateRequest, InferenceMetadata
+from .schemas import (
+    AudioResponse,
+    CpuGenerateRequest,
+    CpuJobResponse,
+    GenerateRequest,
+    InferenceMetadata,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +36,17 @@ app = FastAPI(
     title="Kortexa Music Generation Server",
     version="0.1.0",
     description="Music generation using ACE-Step 1.5 diffusion models.",
+)
+
+cpu_job_queue = CpuMusicJobQueue(
+    db_path=settings.cpu_jobs_db,
+    output_dir=settings.cpu_output_dir,
+    public_prefix=settings.cpu_public_prefix,
+)
+app.mount(
+    settings.cpu_public_prefix,
+    StaticFiles(directory=Path(settings.cpu_output_dir)),
+    name="cpu_audio",
 )
 
 
@@ -66,7 +89,9 @@ def _collect_audio_files(directory: str, audio_format: str) -> list[str]:
         if not os.path.isfile(fpath):
             continue
         # Accept files matching the requested format, or any audio file
-        if fname.endswith(f".{audio_format}") or fname.endswith((".flac", ".mp3", ".wav", ".opus", ".aac")):
+        if fname.endswith(f".{audio_format}") or fname.endswith(
+            (".flac", ".mp3", ".wav", ".opus", ".aac")
+        ):
             with open(fpath, "rb") as f:
                 encoded.append(base64.b64encode(f.read()).decode("utf-8"))
     return encoded
@@ -176,7 +201,10 @@ def _build_metadata(
 async def generate(req: GenerateRequest) -> AudioResponse:
     logger.info(
         "generate: caption='%s' duration=%s steps=%d guidance=%.1f",
-        req.caption, req.duration, req.inference_steps, req.guidance_scale,
+        req.caption,
+        req.duration,
+        req.inference_steps,
+        req.guidance_scale,
     )
 
     params = _build_params(
@@ -204,7 +232,9 @@ async def generate(req: GenerateRequest) -> AudioResponse:
     with _temp_dir() as save_dir:
         try:
             result = await pipeline_manager.generate_async(
-                params=params, config=config, save_dir=save_dir,
+                params=params,
+                config=config,
+                save_dir=save_dir,
             )
         except Exception as exc:
             logger.exception("Generation failure")
@@ -234,12 +264,98 @@ async def generate(req: GenerateRequest) -> AudioResponse:
     )
 
 
+async def _require_cpu_token(authorization: str | None = Header(default=None)) -> None:
+    """Require a configured bearer token for CPU emergency-bed generation."""
+    if not settings.cpu_api_token:
+        raise HTTPException(status_code=503, detail="CPU generation requires CPU_API_TOKEN")
+    expected = f"Bearer {settings.cpu_api_token}"
+    if authorization != expected:
+        raise HTTPException(status_code=401, detail="Missing or invalid CPU generation token")
+
+
+def _cpu_job_response(job: dict) -> CpuJobResponse:
+    return CpuJobResponse(
+        id=job["id"],
+        state=job["state"],
+        created_at=job["created_at"],
+        updated_at=job["updated_at"],
+        actual_seed=job["actual_seed"],
+        audio_url=job.get("audio_url"),
+        sample_rate=job.get("sample_rate"),
+        peak=job.get("peak"),
+        rms_dbfs=job.get("rms_dbfs"),
+        lufs=job.get("lufs"),
+        quality_warnings=json.loads(job.get("quality_warnings_json") or "[]"),
+        error=job.get("error"),
+    )
+
+
+# ----------------------------------------------------------------------
+# POST /generate/cpu — experimental authenticated CPU emergency-bed queue
+# ----------------------------------------------------------------------
+@app.post(
+    "/generate/cpu",
+    response_model=CpuJobResponse,
+    status_code=202,
+    responses={401: {"description": "Unauthorized"}, 500: {"description": "CPU enqueue failed"}},
+)
+async def generate_cpu(
+    req: CpuGenerateRequest,
+    _: None = Depends(_require_cpu_token),
+) -> CpuJobResponse:
+    """Queue an experimental CPU emergency-bed render and return persistent job state."""
+    duration = req.duration or 180.0
+    bpm = req.bpm or 0
+    logger.info(
+        "queue_cpu: caption='%s' duration=%s bpm=%s key=%s scale=%s style=%s",
+        req.caption,
+        duration,
+        req.bpm,
+        req.key,
+        req.scale,
+        req.style,
+    )
+
+    try:
+        job = await asyncio.to_thread(
+            cpu_job_queue.enqueue,
+            CpuSongSpec(
+                caption=req.caption,
+                duration=duration,
+                bpm=bpm,
+                key=req.key,
+                scale=req.scale,
+                seed=req.seed,
+                style=req.style,
+            ),
+        )
+    except Exception as exc:
+        logger.exception("CPU enqueue failure")
+        raise HTTPException(status_code=500, detail="CPU music job enqueue failed") from exc
+    return _cpu_job_response(job)
+
+
+@app.get("/generate/cpu/{job_id}", response_model=CpuJobResponse)
+async def get_cpu_job(
+    job_id: str,
+    _: None = Depends(_require_cpu_token),
+) -> CpuJobResponse:
+    """Return queued/running/failed/completed state for a CPU emergency-bed job."""
+    try:
+        job = await asyncio.to_thread(cpu_job_queue.get, job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="CPU music job not found") from exc
+    cpu_job_queue.ensure_worker()
+    return _cpu_job_response(job)
+
+
 # ----------------------------------------------------------------------
 # POST /generate/stream — SSE streaming variant of /generate
 # ----------------------------------------------------------------------
 @app.post("/generate/stream")
 async def generate_stream(req: GenerateRequest, include_audio: bool = True):
     from .sse import stream_generate
+
     return await stream_generate(req, include_audio=include_audio)
 
 
@@ -272,7 +388,9 @@ async def cover(
     logger.info("cover: caption='%s' strength=%.2f", caption, audio_cover_strength)
 
     if batch_size > settings.max_batch_size:
-        raise HTTPException(status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}")
+        raise HTTPException(
+            status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}"
+        )
 
     start = time.perf_counter()
     with _temp_dir() as save_dir:
@@ -304,7 +422,9 @@ async def cover(
 
         try:
             result = await pipeline_manager.generate_async(
-                params=params, config=config, save_dir=save_dir,
+                params=params,
+                config=config,
+                save_dir=save_dir,
             )
         except Exception as exc:
             logger.exception("Cover failure")
@@ -366,7 +486,9 @@ async def repaint(
     if repainting_end <= repainting_start:
         raise HTTPException(status_code=400, detail="repainting_end must be > repainting_start")
     if batch_size > settings.max_batch_size:
-        raise HTTPException(status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}")
+        raise HTTPException(
+            status_code=400, detail=f"batch_size must be <= {settings.max_batch_size}"
+        )
 
     start = time.perf_counter()
     with _temp_dir() as save_dir:
@@ -399,7 +521,9 @@ async def repaint(
 
         try:
             result = await pipeline_manager.generate_async(
-                params=params, config=config, save_dir=save_dir,
+                params=params,
+                config=config,
+                save_dir=save_dir,
             )
         except Exception as exc:
             logger.exception("Repaint failure")

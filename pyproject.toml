@@ -23,6 +23,8 @@ dependencies = [
     "uvicorn[standard]>=0.40.0",
     "pydantic>=2.12.5",
     "python-multipart>=0.0.21",
+    "numpy>=2.0.0",
+    "pyloudnorm>=0.1.1",
     "ace-step",
 ]
 
